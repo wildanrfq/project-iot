@@ -95,7 +95,9 @@ export function AlarmControlBar({
               <span>Senyapkan Sirine</span>
             </button>
           )
-        ) : (
+        ) : null}
+
+        {!(audioArmed && isCriticalLive && alarmEnabled) ? (
           <button
             type="button"
             className="btn"
@@ -105,7 +107,7 @@ export function AlarmControlBar({
             <SoundWaveIcon />
             <span>{isTesting ? 'Hentikan Tes' : 'Tes Sirine Keras'}</span>
           </button>
-        )}
+        ) : null}
 
         <button
           type="button"

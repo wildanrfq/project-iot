@@ -28,8 +28,8 @@ export function createMonitorService(options = {}) {
   const persistConfig = options.persistConfig ?? true;
   let config = {
     gpsFallbackEnabled: false,
-    campusLat: -6.208763,
-    campusLng: 106.845599,
+    campusLat: -7.782196920093637,
+    campusLng: 110.4146253,
     campusLocationLabel: 'Stand Expo IoT Kampus',
     ...(options.initialConfig || loadInitialConfig()),
   };
@@ -52,8 +52,8 @@ export function createMonitorService(options = {}) {
   let simulatorState = {
     distanceCm: 15.0,
     gpsState: GPS_STATES.VALID,
-    lat: -6.2088,
-    lng: 106.8456,
+    lat: -7.782196920093637,
+    lng: 110.4146253,
     satellites: 7,
   };
 
@@ -95,8 +95,8 @@ export function createMonitorService(options = {}) {
     if (config.gpsFallbackEnabled) {
       return {
         state: GPS_STATES.VALID,
-        lat: clampCoord(config.campusLat, -6.208763, -90, 90),
-        lng: clampCoord(config.campusLng, 106.845599, -180, 180),
+        lat: clampCoord(config.campusLat, -7.782196920093637, -90, 90),
+        lng: clampCoord(config.campusLng, 110.4146253, -180, 180),
         satellites: rawGps?.satellites ?? 0,
         isFallback: true,
         rawState: rawGps?.state || GPS_STATES.CARI_SATELIT,
@@ -342,8 +342,8 @@ export function createMonitorService(options = {}) {
   async function updateConfig(patch = {}) {
     const prevSource = config.dataSource;
 
-    if (patch.dataSource === 'blynk' || patch.dataSource === 'simulator') {
-      config.dataSource = patch.dataSource;
+    if (patch.dataSource === 'blynk') {
+      config.dataSource = 'blynk';
     }
     if (patch.blynkServer !== undefined) {
       config.blynkServer = sanitizeBlynkServer(patch.blynkServer);

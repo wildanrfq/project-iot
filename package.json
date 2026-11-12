@@ -17,6 +17,7 @@
     "@fontsource/ibm-plex-sans": "^5.2.6",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "maplibre-gl": "^6.18.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -26,4 +27,3 @@
     "vite": "^6.2.0"
   }
 }
-

@@ -30,9 +30,7 @@ function readLocalFile() {
 
 export function loadInitialConfig() {
   const saved = readLocalFile();
-  const dataSource =
-    saved.dataSource ||
-    (process.env.DATA_SOURCE === 'simulator' ? 'simulator' : 'blynk');
+  const dataSource = 'blynk';
 
   const blynkServer = ALLOWED_BLYNK_SERVERS.has(saved.blynkServer)
     ? saved.blynkServer
@@ -64,8 +62,8 @@ export function loadInitialConfig() {
       ? saved.gpsFallbackEnabled
       : process.env.GPS_FALLBACK_ENABLED === 'true';
 
-  const campusLat = clampCoord(saved.campusLat ?? process.env.CAMPUS_LAT, -6.208763, -90, 90);
-  const campusLng = clampCoord(saved.campusLng ?? process.env.CAMPUS_LNG, 106.845599, -180, 180);
+  const campusLat = clampCoord(saved.campusLat ?? process.env.CAMPUS_LAT, -7.782196920093637, -90, 90);
+  const campusLng = clampCoord(saved.campusLng ?? process.env.CAMPUS_LNG, 110.4146253, -180, 180);
   const campusLocationLabel = sanitizeLocationLabel(
     saved.campusLocationLabel ?? process.env.CAMPUS_LOCATION_LABEL,
     'Stand Expo IoT Kampus'
@@ -100,7 +98,7 @@ export function clampInt(value, fallback, min, max) {
 export function clampCoord(value, fallback, min, max) {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
-  return Number(Math.min(max, Math.max(min, num)).toFixed(6));
+  return Math.min(max, Math.max(min, num));
 }
 
 export function sanitizeLocationLabel(value, fallback = 'Stand Expo IoT Kampus') {

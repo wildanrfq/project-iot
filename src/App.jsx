@@ -1,39 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlarmControlBar } from './components/AlarmControlBar.jsx';
-import { CriteriaStrip } from './components/CriteriaStrip.jsx';
-import { ExpoSection } from './components/ExpoSection.jsx';
+import { DangerChallengeCard } from './components/DangerChallengeCard.jsx';
 import {
   GaugeMark,
-  MoonGlyph,
-  PauseGlyph,
-  PlayGlyph,
   RefreshGlyph,
-  SlidersGlyph,
-  SunGlyph,
 } from './components/Icons.jsx';
-import { OperationsSection } from './components/OperationsSection.jsx';
+import { MapLibrePanel } from './components/MapLibrePanel.jsx';
 import { SettingsModal } from './components/SettingsModal.jsx';
 import { TelemetryPanel } from './components/TelemetryPanel.jsx';
 import { createFloodAlarmEngine } from './utils/alarmAudio.js';
 import { formatWibTime } from './utils/formatters.js';
 
-const THEME_STORAGE_KEY = 'iot-flood-theme';
-
-function getInitialTheme() {
-  try {
-    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
-    if (saved === 'dark' || saved === 'light') return saved;
-  } catch {
-    // Abaikan jika storage tidak tersedia
-  }
-  return 'light';
-}
-
 export default function App() {
-  const [theme, setTheme] = useState(getInitialTheme);
   const [state, setState] = useState(null);
   const [fetchError, setFetchError] = useState(null);
-  const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -58,34 +38,28 @@ export default function App() {
   useEffect(() => {
     const engine = alarmEngineRef.current;
 
-    const tryAutoArm = async () => {
+    const tryAutoArm = async (event) => {
+      if (event?.target?.closest?.('.alarm-bar, button')) {
+        return;
+      }
       const ok = await engine.arm();
       if (ok) {
         setAudioArmed(true);
-        window.removeEventListener('pointerdown', tryAutoArm);
+        window.removeEventListener('click', tryAutoArm);
         window.removeEventListener('keydown', tryAutoArm);
       }
     };
 
-    window.addEventListener('pointerdown', tryAutoArm, { passive: true });
+    window.addEventListener('click', tryAutoArm, { passive: true });
     window.addEventListener('keydown', tryAutoArm, { passive: true });
 
     return () => {
-      window.removeEventListener('pointerdown', tryAutoArm);
+      window.removeEventListener('click', tryAutoArm);
       window.removeEventListener('keydown', tryAutoArm);
       if (testTimerRef.current) clearTimeout(testTimerRef.current);
       engine.destroy();
     };
   }, []);
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-    } catch {
-      // Abaikan jika storage tidak tersedia
-    }
-  }, [theme]);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -115,12 +89,11 @@ export default function App() {
   const pollIntervalMs = state?.config?.pollIntervalMs ?? 2000;
 
   useEffect(() => {
-    if (!autoRefresh) return undefined;
     const pollId = setInterval(() => {
       loadStatus();
     }, pollIntervalMs);
     return () => clearInterval(pollId);
-  }, [autoRefresh, pollIntervalMs, loadStatus]);
+  }, [pollIntervalMs, loadStatus]);
 
   async function handleManualRefresh() {
     setRefreshing(true);
@@ -156,25 +129,6 @@ export default function App() {
     return payload;
   }
 
-  async function handleSwitchSource(nextSource) {
-    await handleSaveConfig({ dataSource: nextSource });
-  }
-
-  async function handleSimulate(patch) {
-    const res = await fetch('/api/simulator', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
-    const payload = await res.json();
-    if (!res.ok) {
-      throw new Error(payload?.error || 'Gagal memperbarui nilai simulasi.');
-    }
-    setState(payload);
-    setFetchError(null);
-    setNowMs(Date.now());
-  }
-
   async function handleTestTelegram() {
     const res = await fetch('/api/telegram/test', { method: 'POST' });
     const payload = await res.json();
@@ -187,11 +141,9 @@ export default function App() {
     };
   }
 
-  const activeSource = state?.config?.dataSource ?? 'blynk';
   const activeCode = state?.reading?.criterion?.code ?? null;
   const isCriticalLive = Boolean(
-    activeCode === 'KRITIS' &&
-      (state?.reading?.isSimulated || state?.hardwareConnected === true)
+    activeCode === 'KRITIS' && state?.hardwareConnected === true
   );
 
   // Reset status silence otomatis setiap kali status keluar dari KRITIS
@@ -202,10 +154,8 @@ export default function App() {
     wasCriticalRef.current = isCriticalLive;
   }, [isCriticalLive]);
 
-  // Perbarui konteks jarak, volume, dan voice pada engine audio
   useEffect(() => {
-    const engine = alarmEngineRef.current;
-    engine.setDistanceContext(state?.reading?.criterion?.displayDistance);
+    alarmEngineRef.current.setDistanceContext(state?.reading?.criterion?.displayDistance);
   }, [state?.reading?.criterion?.displayDistance]);
 
   useEffect(() => {
@@ -262,7 +212,17 @@ export default function App() {
   ]);
 
   async function handleArmAudio() {
-    const ok = await alarmEngineRef.current.arm();
+    const engine = alarmEngineRef.current;
+    if (isCriticalLive && alarmEnabled && !episodeSilenced) {
+      const started = await engine.startSiren({
+        volume: volumePercent / 100,
+        voiceEnabled,
+      });
+      setAudioArmed(started || engine.isArmed());
+      setIsPlayingAudio(Boolean(started));
+      return;
+    }
+    const ok = await engine.arm();
     setAudioArmed(ok);
   }
 
@@ -274,36 +234,69 @@ export default function App() {
           clearTimeout(testTimerRef.current);
           testTimerRef.current = null;
         }
+        alarmEngineRef.current.stopSiren();
         setIsTestingAudio(false);
+        setIsPlayingAudio(false);
       }
       return next;
     });
   }
 
   async function handleToggleTestSiren() {
+    const engine = alarmEngineRef.current;
     if (isTestingAudio) {
       if (testTimerRef.current) {
         clearTimeout(testTimerRef.current);
         testTimerRef.current = null;
       }
+      engine.stopSiren();
       setIsTestingAudio(false);
+      setIsPlayingAudio(false);
       return;
     }
 
-    const armed = audioArmed || (await alarmEngineRef.current.arm());
-    if (armed) {
+    if (testTimerRef.current) {
+      clearTimeout(testTimerRef.current);
+      testTimerRef.current = null;
+    }
+
+    // Panggil startSiren langsung pada click handler agar browser mengizinkan AudioContext berbunyi
+    const started = await engine.startSiren({
+      volume: volumePercent / 100,
+      voiceEnabled: false,
+    });
+
+    if (started) {
       setAudioArmed(true);
       setIsTestingAudio(true);
+      setIsPlayingAudio(true);
       testTimerRef.current = setTimeout(() => {
         testTimerRef.current = null;
         setIsTestingAudio(false);
-      }, 2500);
+      }, 3500);
+    } else {
+      setAudioArmed(engine.isArmed());
+      setIsTestingAudio(false);
+      setIsPlayingAudio(false);
     }
   }
 
   function handleChallengeWin() {
     if (!isPlayingAudio && audioArmed) {
       alarmEngineRef.current.playChallengeWinChime();
+    }
+  }
+
+  let connectionPill = 'Menghubungkan...';
+  if (state) {
+    if (state.hardwareConnected) {
+      connectionPill = 'ESP32 Online';
+    } else if (state.connectionState === 'offline') {
+      connectionPill = 'ESP32 Offline';
+    } else if (state.connectionState === 'unconfigured') {
+      connectionPill = 'Blynk Belum Diatur';
+    } else {
+      connectionPill = 'Live Blynk';
     }
   }
 
@@ -318,48 +311,14 @@ export default function App() {
             <div>
               <h1 className="brand-title">Pantau Banjir ESP32</h1>
               <p className="brand-subtitle">
-                Monitor Kriteria main.ino, Blynk Cloud &amp; Notifikasi Telegram
+                Early Warning Ketinggian Air, Prediksi Banjir &amp; Peta Lokasi
               </p>
             </div>
           </div>
+          <span className="source-tag mono">{connectionPill}</span>
         </div>
 
         <nav className="topbar-controls" aria-label="Kontrol monitoring">
-          <div className="segmented-group" role="group" aria-label="Sumber data sensor">
-            <button
-              type="button"
-              className="segmented-btn"
-              aria-pressed={activeSource === 'blynk'}
-              onClick={() => handleSwitchSource('blynk')}
-              disabled={!state}
-            >
-              Live Blynk
-            </button>
-            <button
-              type="button"
-              className="segmented-btn"
-              aria-pressed={activeSource === 'simulator'}
-              onClick={() => handleSwitchSource('simulator')}
-              disabled={!state}
-            >
-              Simulasi Uji
-            </button>
-          </div>
-
-          <button
-            type="button"
-            className="btn"
-            aria-pressed={autoRefresh}
-            onClick={() => setAutoRefresh((prev) => !prev)}
-          >
-            {autoRefresh ? <PauseGlyph /> : <PlayGlyph />}
-            <span>
-              {autoRefresh
-                ? `Auto ${Math.round(pollIntervalMs / 1000)}d (Jeda)`
-                : 'Lanjut Auto'}
-            </span>
-          </button>
-
           <button
             type="button"
             className="btn"
@@ -368,25 +327,6 @@ export default function App() {
           >
             <RefreshGlyph />
             <span>{refreshing ? 'Menyegarkan...' : 'Refresh'}</span>
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setSettingsOpen(true)}
-            disabled={!state}
-          >
-            <SlidersGlyph />
-            <span>Pengaturan</span>
-          </button>
-
-          <button
-            type="button"
-            className="btn"
-            onClick={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
-          >
-            {theme === 'light' ? <MoonGlyph /> : <SunGlyph />}
-            <span>{theme === 'light' ? 'Mode Gelap' : 'Mode Terang'}</span>
           </button>
         </nav>
       </header>
@@ -410,7 +350,7 @@ export default function App() {
           <section className="state-banner" role="status" aria-live="polite">
             <h2 className="state-banner-title">Memuat Data Monitoring...</h2>
             <p className="state-banner-desc">
-              Menghubungi backend lokal untuk mengambil status sensor ultrasonik, GPS, dan Telegram.
+              Menghubungi backend lokal untuk mengambil status sensor ultrasonik dan peta GPS.
             </p>
           </section>
         )}
@@ -419,9 +359,8 @@ export default function App() {
           <section className="state-banner">
             <h2 className="state-banner-title">Token Blynk Belum Dikonfigurasi</h2>
             <p className="state-banner-desc">
-              Mode Live Blynk aktif, namun <strong>BLYNK_AUTH_TOKEN</strong> belum diisi. Masukkan
-              Auth Token Blynk Anda di menu Pengaturan, atau jalankan Mode Simulasi Uji untuk
-              mencoba semua kriteria status dan notifikasi Telegram sekarang.
+              Mode Live Blynk aktif, namun <strong>BLYNK_AUTH_TOKEN</strong> belum diisi. Buka
+              Pengaturan untuk mengisi token Blynk Cloud Anda.
             </p>
             <div className="state-banner-actions">
               <button
@@ -429,14 +368,7 @@ export default function App() {
                 className="btn btn-primary"
                 onClick={() => setSettingsOpen(true)}
               >
-                Isi Token Blynk &amp; Telegram
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => handleSwitchSource('simulator')}
-              >
-                Jalankan Simulasi Uji
+                Buka Pengaturan
               </button>
             </div>
           </section>
@@ -511,40 +443,27 @@ export default function App() {
         )}
 
         {state && state.reading && (
-          <TelemetryPanel
-            state={state}
-            nowMs={nowMs}
-            onOpenSettings={() => setSettingsOpen(true)}
-          />
+          <TelemetryPanel state={state} nowMs={nowMs} />
         )}
 
-        <CriteriaStrip activeCode={activeCode} />
-
         {state && (
-          <ExpoSection
+          <DangerChallengeCard
             state={state}
-            onSaveConfig={handleSaveConfig}
-            onSwitchSource={handleSwitchSource}
             onChallengeWin={handleChallengeWin}
           />
         )}
 
         {state && (
-          <OperationsSection
-            state={state}
-            onSimulate={handleSimulate}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onSwitchSource={handleSwitchSource}
-          />
+          <MapLibrePanel state={state} onSaveConfig={handleSaveConfig} />
         )}
       </main>
 
       <footer className="app-footer">
-        <span>Sumber ambang batas: main.ino (AMAN &gt; 10 cm, WASPADA &gt; 7 cm, BAHAYA &gt; 3 cm, KRITIS &lt;= 3 cm)</span>
+        <span>Ambang Sensor: AMAN &gt; 10 cm, WASPADA &gt; 7 cm, BAHAYA &gt; 3 cm, KRITIS &lt;= 3 cm</span>
         <span>
-          Status polling:{' '}
+          Auto-refresh:{' '}
           <strong className="mono">
-            {autoRefresh ? `Aktif tiap ${Math.round(pollIntervalMs / 1000)} dtk` : 'Dijeda'}
+            Aktif tiap {Math.round(pollIntervalMs / 1000)} dtk
           </strong>
         </span>
       </footer>
@@ -561,4 +480,3 @@ export default function App() {
     </div>
   );
 }
-

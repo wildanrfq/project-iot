@@ -29,7 +29,7 @@ export function createFloodAlarmEngine() {
     const AudioCtx = getAudioContextClass();
     if (!AudioCtx) return null;
 
-    if (!ctx) {
+    if (!ctx || ctx.state === 'closed') {
       ctx = new AudioCtx();
 
       // Compressor pra-master untuk menaikkan loudness (RMS) tanpa kliping pecah
@@ -64,15 +64,16 @@ export function createFloodAlarmEngine() {
     if (!audioCtx) return false;
 
     try {
-      if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-      }
-      // Putar buffer senyap 1 sample untuk mengunci izin audio pada Safari / mobile
+      // Panggil resume dan mainkan buffer senyap secara sinkron agar user gesture tidak kedaluwarsa
+      const resumePromise = audioCtx.state !== 'running' ? audioCtx.resume() : null;
       const buffer = audioCtx.createBuffer(1, 1, 22050);
       const source = audioCtx.createBufferSource();
       source.buffer = buffer;
       source.connect(audioCtx.destination);
       source.start(0);
+      if (resumePromise) {
+        await resumePromise;
+      }
       return audioCtx.state === 'running';
     } catch {
       return false;
@@ -217,21 +218,20 @@ export function createFloodAlarmEngine() {
     const audioCtx = ensureContext();
     if (!audioCtx) return false;
 
-    if (audioCtx.state === 'suspended') {
-      try {
-        await audioCtx.resume();
-      } catch {
-        return false;
-      }
-    }
+    const neededResume = audioCtx.state !== 'running';
+    const resumePromise = neededResume ? audioCtx.resume().catch(() => {}) : null;
 
-    if (audioCtx.state !== 'running') {
-      return false;
-    }
-
-    if (isPlayingSiren) {
+    if (isPlayingSiren && activeNodes) {
       applySirenGain(currentVolume, 0.05);
-      return true;
+      if (resumePromise) {
+        await resumePromise;
+      }
+      return audioCtx.state === 'running';
+    }
+
+    if (cycleTimer) {
+      clearInterval(cycleTimer);
+      cycleTimer = null;
     }
 
     const oscMain = audioCtx.createOscillator();
@@ -275,6 +275,22 @@ export function createFloodAlarmEngine() {
 
     if (currentVoiceEnabled) {
       startVoiceLoop();
+    }
+
+    if (resumePromise) {
+      await resumePromise;
+      if (!isPlayingSiren || !activeNodes) {
+        return false;
+      }
+      if (audioCtx.state === 'running') {
+        applySirenGain(currentVolume, 0.03);
+        scheduleSirenSweep();
+      }
+    }
+
+    if (audioCtx.state !== 'running') {
+      stopSiren();
+      return false;
     }
 
     return true;
@@ -355,6 +371,7 @@ export function createFloodAlarmEngine() {
   return {
     arm,
     isArmed,
+    getContextState: () => (ctx ? ctx.state : 'uninitialized'),
     startSiren,
     stopSiren,
     setVolume,

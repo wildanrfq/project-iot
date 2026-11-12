@@ -18,8 +18,8 @@
 #include <TinyGPSPlus.h>
 
 // ===== Kredensial WiFi (ISI SESUAI HOTSPOT / ROUTER ANDA) =====
-const char* WIFI_SSID = "a23 5G";
-const char* WIFI_PASS = "12345678";
+const char* WIFI_SSID = "MAKINUL AMIN 1";
+const char* WIFI_PASS = "h2sannyatha";
 
 // ===== Konfigurasi Pin Terbaru (sama persis dengan test_ledaa_oled_gps.ino) =====
 #define TRIG_PIN 5
@@ -279,8 +279,8 @@ void setup() {
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Blynk.config(BLYNK_AUTH_TOKEN, BLYNK_SERVER_HOST, 80);
 
-  // Kirim telemetry ke Blynk setiap 2 detik saat online
-  timer.setInterval(2000L, sendTelemetryToBlynk);
+  // Kirim telemetry ke Blynk setiap 1 detik saat online
+  timer.setInterval(1000L, sendTelemetryToBlynk);
 }
 
 void loop() {

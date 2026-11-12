@@ -100,9 +100,14 @@ export function SettingsModal({
   if (!isOpen) return null;
 
   function handleTabKeyDown(e) {
-    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    const order = ['config', 'guide'];
+    const idx = order.indexOf(activeTab);
+    if (e.key === 'ArrowRight') {
       e.preventDefault();
-      setActiveTab((prev) => (prev === 'config' ? 'guide' : 'config'));
+      setActiveTab(order[(idx + 1) % order.length]);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      setActiveTab(order[(idx - 1 + order.length) % order.length]);
     }
   }
 
@@ -239,7 +244,7 @@ export function SettingsModal({
           </button>
         </div>
 
-        {activeTab === 'config' ? (
+        {activeTab === 'config' && (
           <div role="tabpanel" id="panel-config" aria-labelledby="tab-config">
             <form onSubmit={handleSubmit} className="form-grid" noValidate>
               <div className="field-group">
@@ -383,7 +388,9 @@ export function SettingsModal({
               </div>
             </form>
           </div>
-        ) : (
+        )}
+
+        {activeTab === 'guide' && (
           <div role="tabpanel" id="panel-guide" aria-labelledby="tab-guide" className="form-grid">
             <h3 className="section-title">1. Firmware ESP32 + Blynk</h3>
             <ol className="setup-steps">

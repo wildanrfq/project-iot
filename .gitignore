@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 server/config.local.json
+server/leaderboard.local.json
 *.log
 .DS_Store
 

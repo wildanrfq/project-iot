@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { createLeaderboardService } from './leaderboard.js';
 import { createMonitorService } from './monitor.js';
 
 dns.setDefaultResultOrder('ipv4first');
@@ -10,7 +11,10 @@ dns.setDefaultResultOrder('ipv4first');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.resolve(__dirname, '..', 'dist');
 
-export function createApp(monitorService) {
+export function createApp(
+  monitorService,
+  leaderboardService = createLeaderboardService()
+) {
   const app = express();
   app.use(express.json({ limit: '64kb' }));
 
@@ -36,18 +40,26 @@ export function createApp(monitorService) {
     }
   });
 
-  app.post('/api/simulator', async (req, res) => {
-    try {
-      const state = await monitorService.setSimulatorValues(req.body || {});
-      res.json(state);
-    } catch (err) {
-      res.status(400).json({ error: err?.message || 'Input simulasi tidak valid.' });
-    }
-  });
-
   app.post('/api/telegram/test', async (_req, res) => {
     const result = await monitorService.sendTestTelegram();
     res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  app.get('/api/leaderboard', (_req, res) => {
+    res.json(leaderboardService.getSnapshot());
+  });
+
+  app.post('/api/leaderboard', (req, res) => {
+    try {
+      const result = leaderboardService.addEntry(req.body || {});
+      res.status(201).json(result);
+    } catch (err) {
+      res.status(400).json({ error: err?.message || 'Data leaderboard tidak valid.' });
+    }
+  });
+
+  app.delete('/api/leaderboard', (_req, res) => {
+    res.json(leaderboardService.resetEntries());
   });
 
   if (process.env.NODE_ENV === 'production' && fs.existsSync(DIST_DIR)) {

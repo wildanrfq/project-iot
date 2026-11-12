@@ -8,6 +8,7 @@ import {
   GPS_STATES,
 } from '../src/shared/criteria.js';
 import { createMonitorService } from '../server/monitor.js';
+import { createLeaderboardService } from '../server/leaderboard.js';
 import { createApp } from '../server/index.js';
 import {
   buildTelegramAlertMessage,
@@ -202,8 +203,23 @@ test('monitor service tidak mengunci cooldown 60 detik saat pengiriman Telegram 
   assert.ok(cooldownDeltaMs <= 7000, `Expected <= 7s retry backoff, got ${cooldownDeltaMs}ms`);
 });
 
-test('API Express melayani /api/status, /api/simulator, dan menyembunyikan token rahasia', async () => {
+test('API Express melayani /api/status, /api/refresh, dan menyembunyikan token rahasia', async () => {
+  const mockBlynkFetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/external/api/get')) {
+      return new Response(
+        JSON.stringify({ V0: 6.0, V1: 'BAHAYA', V2: -7.782197, V3: 110.414625, V4: 7, V5: 'VALID' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    if (u.includes('/external/api/isHardwareConnected')) {
+      return new Response('true', { status: 200 });
+    }
+    throw new Error('Unexpected URL: ' + u);
+  };
+
   const service = createMonitorService({
+    fetchImpl: mockBlynkFetch,
     persistConfig: false,
     initialConfig: {
       dataSource: 'blynk',
@@ -232,15 +248,11 @@ test('API Express melayani /api/status, /api/simulator, dan menyembunyikan token
     assert.ok(!JSON.stringify(statusJson).includes('MY_SUPER_SECRET_BLYNK_TOKEN'));
     assert.ok(!JSON.stringify(statusJson).includes('MY_SUPER_SECRET_TG_TOKEN'));
 
-    const simRes = await fetch(`${baseUrl}/api/simulator`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ distanceCm: 6.0 }),
-    });
-    assert.equal(simRes.status, 200);
-    const simJson = await simRes.json();
-    assert.equal(simJson.reading.criterion.code, 'BAHAYA');
-    assert.equal(simJson.config.dataSource, 'simulator');
+    const refreshRes = await fetch(`${baseUrl}/api/refresh`, { method: 'POST' });
+    assert.equal(refreshRes.status, 200);
+    const refreshJson = await refreshRes.json();
+    assert.equal(refreshJson.reading.criterion.code, 'BAHAYA');
+    assert.equal(refreshJson.config.dataSource, 'blynk');
   } finally {
     service.stopPollingLoop();
     await new Promise((resolve) => server.close(resolve));
@@ -444,6 +456,79 @@ test('fallback pin GPS kampus aktif saat mode indoor dinyalakan dan menghormati 
   });
   assert.equal(realGpsState.reading.gps.isFallback, false);
   assert.equal(realGpsState.reading.gps.lat, -6.2088);
+});
+
+test('leaderboard service dan API mengurutkan skor serta memvalidasi angkatan 23-26', async () => {
+  const monitor = createMonitorService({ persistConfig: false });
+  const leaderboard = createLeaderboardService({ persistPath: null });
+  const app = createApp(monitor, leaderboard);
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    // Angkatan di luar 23-26 harus ditolak
+    const invalidRes = await fetch(`http://127.0.0.1:${port}/api/leaderboard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Budi',
+        angkatan: '22',
+        outcome: 'won',
+        holdSec: 3.0,
+        finalDistanceCm: 5.0,
+      }),
+    });
+    assert.equal(invalidRes.status, 400);
+
+    // Tambah peserta gagal dulu (1.8 dtk) lalu peserta menang (3.0 dtk)
+    await fetch(`http://127.0.0.1:${port}/api/leaderboard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Andi',
+        angkatan: '24',
+        outcome: 'failed',
+        holdSec: 1.8,
+        finalDistanceCm: 2.1,
+      }),
+    });
+
+    const winRes = await fetch(`http://127.0.0.1:${port}/api/leaderboard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Citra',
+        angkatan: '26',
+        outcome: 'won',
+        holdSec: 3.0,
+        finalDistanceCm: 5.2,
+      }),
+    });
+    assert.equal(winRes.status, 201);
+    const winJson = await winRes.json();
+
+    assert.equal(winJson.rank, 1);
+    assert.equal(winJson.entries.length, 2);
+    assert.equal(winJson.entries[0].name, 'Citra');
+    assert.equal(winJson.entries[0].angkatan, '26');
+    assert.equal(winJson.entries[1].name, 'Andi');
+    assert.equal(winJson.entries[1].holdSec, 1.8);
+
+    const angkatan26 = winJson.stats.find((s) => s.angkatan === '26');
+    assert.equal(angkatan26.wins, 1);
+    assert.equal(angkatan26.plays, 1);
+
+    const resetRes = await fetch(`http://127.0.0.1:${port}/api/leaderboard`, {
+      method: 'DELETE',
+    });
+    assert.equal(resetRes.status, 200);
+    const resetJson = await resetRes.json();
+    assert.equal(resetJson.totalEntries, 0);
+  } finally {
+    monitor.stopPollingLoop();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 
