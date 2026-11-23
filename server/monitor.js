@@ -71,6 +71,22 @@ export function createMonitorService(options = {}) {
   let isSendingTelegram = false;
   let logSeq = 1;
 
+  const subscribers = new Set();
+  function subscribe(fn) {
+    if (typeof fn === 'function') {
+      subscribers.add(fn);
+    }
+    return () => subscribers.delete(fn);
+  }
+
+  function notifySubscribers(state) {
+    for (const fn of subscribers) {
+      try {
+        fn(state);
+      } catch {}
+    }
+  }
+
   function addLog(entry) {
     logs = [
       {
@@ -319,7 +335,9 @@ export function createMonitorService(options = {}) {
       connectionState = snap.reason === 'NO_DATA' ? 'offline' : 'error';
       errorMessage = snap.error;
       hardwareConnected = snap.hardwareConnected ?? false;
-      return getState();
+      const state = getState();
+      notifySubscribers(state);
+      return state;
     }
 
     connectionState = snap.hardwareConnected ? 'connected' : 'offline';
@@ -336,7 +354,9 @@ export function createMonitorService(options = {}) {
       advanceTimestamp: snap.hardwareConnected,
     });
 
-    return getState();
+    const state = getState();
+    notifySubscribers(state);
+    return state;
   }
 
   async function updateConfig(patch = {}) {
@@ -354,7 +374,7 @@ export function createMonitorService(options = {}) {
       config.blynkAuthToken = '';
     }
     if (patch.pollIntervalMs !== undefined) {
-      config.pollIntervalMs = clampInt(patch.pollIntervalMs, config.pollIntervalMs, 1000, 30000);
+      config.pollIntervalMs = clampInt(patch.pollIntervalMs, config.pollIntervalMs, 300, 30000);
     }
     if (typeof patch.telegramBotToken === 'string' && patch.telegramBotToken.trim() !== '') {
       config.telegramBotToken = patch.telegramBotToken.trim();
@@ -532,6 +552,33 @@ export function createMonitorService(options = {}) {
     }
   }
 
+  async function pushDirectReading({
+    distanceCm,
+    reportedStatus = null,
+    gps = null,
+    sourceLabel = 'USB Langsung (0 ms)',
+  }) {
+    await applyReading({
+      distanceCm: Number(distanceCm),
+      gps: gps || {
+        state: GPS_STATES.VALID,
+        lat: config.campusLat,
+        lng: config.campusLng,
+        satellites: 7,
+      },
+      sourceLabel,
+      isSimulated: false,
+      nextHardwareConnected: true,
+      advanceTimestamp: true,
+    });
+    connectionState = 'connected';
+    errorMessage = null;
+    hardwareConnected = true;
+    const state = getState();
+    notifySubscribers(state);
+    return state;
+  }
+
   function getState() {
     return {
       serverTime: new Date().toISOString(),
@@ -558,6 +605,8 @@ export function createMonitorService(options = {}) {
     sendTestTelegram,
     startPollingLoop,
     stopPollingLoop,
+    subscribe,
+    pushDirectReading,
   };
 }
 

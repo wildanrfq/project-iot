@@ -7,10 +7,10 @@ import {
 function computeMarkerPercent(distanceCm) {
   if (!Number.isFinite(distanceCm) || distanceCm >= 999) return 96;
   if (distanceCm <= 0) return 2;
-  if (distanceCm <= 3) return (distanceCm / 3) * 15;
-  if (distanceCm <= 7) return 15 + ((distanceCm - 3) / 4) * 20;
-  if (distanceCm <= 10) return 35 + ((distanceCm - 7) / 3) * 15;
-  return Math.min(98, 50 + ((distanceCm - 10) / 10) * 50);
+  if (distanceCm <= 5) return (distanceCm / 5) * 15;
+  if (distanceCm <= 9) return 15 + ((distanceCm - 5) / 4) * 20;
+  if (distanceCm <= 12) return 35 + ((distanceCm - 9) / 3) * 15;
+  return Math.min(98, 50 + ((distanceCm - 12) / 10) * 50);
 }
 
 export function TelemetryPanel({ state, nowMs }) {
@@ -83,19 +83,19 @@ export function TelemetryPanel({ state, nowMs }) {
           <span className="mono">{criterion.displayDistance}</span>
         </div>
         <div className="clearance-track">
-          <div className="zone-seg--kritis" title="KRITIS <= 3 cm" />
-          <div className="zone-seg--bahaya" title="BAHAYA 3-7 cm" />
-          <div className="zone-seg--waspada" title="WASPADA 7-10 cm" />
-          <div className="zone-seg--aman" title="AMAN > 10 cm" />
+          <div className="zone-seg--kritis" title="KRITIS <= 5 cm" />
+          <div className="zone-seg--bahaya" title="BAHAYA 5-9 cm" />
+          <div className="zone-seg--waspada" title="WASPADA 9-12 cm" />
+          <div className="zone-seg--aman" title="AMAN > 12 cm" />
         </div>
         <div className="clearance-marker-row" aria-hidden="true">
           <div className="clearance-marker" style={{ left: `${markerPercent}%` }} />
         </div>
         <div className="clearance-ticks mono">
           <span>0 cm (Kritis)</span>
-          <span>3 cm</span>
-          <span>7 cm</span>
-          <span>10 cm</span>
+          <span>5 cm</span>
+          <span>9 cm</span>
+          <span>12 cm</span>
           <span>20+ cm (Aman)</span>
         </div>
       </div>

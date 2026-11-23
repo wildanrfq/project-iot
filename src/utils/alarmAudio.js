@@ -13,12 +13,7 @@ export function createFloodAlarmEngine() {
   let isPlayingSiren = false;
   let activeNodes = null;
   let cycleTimer = null;
-  let voiceStartTimer = null;
-  let voiceTimer = null;
-  let voiceRestoreTimer = null;
   let currentVolume = 1.0; // Default 100% maksimal
-  let currentVoiceEnabled = true;
-  let currentDistanceText = '<= 3 cm';
 
   function getAudioContextClass() {
     if (typeof window === 'undefined') return null;
@@ -101,52 +96,6 @@ export function createFloodAlarmEngine() {
     }
   }
 
-  function clearVoiceTimers() {
-    if (voiceStartTimer) {
-      clearTimeout(voiceStartTimer);
-      voiceStartTimer = null;
-    }
-    if (voiceTimer) {
-      clearInterval(voiceTimer);
-      voiceTimer = null;
-    }
-    if (voiceRestoreTimer) {
-      clearTimeout(voiceRestoreTimer);
-      voiceRestoreTimer = null;
-    }
-  }
-
-  function startVoiceLoop() {
-    clearVoiceTimers();
-    if (!isPlayingSiren || !currentVoiceEnabled) return;
-    voiceTimer = setInterval(speakParodyAlert, 13000);
-    voiceStartTimer = setTimeout(() => {
-      voiceStartTimer = null;
-      if (isPlayingSiren && currentVoiceEnabled) {
-        speakParodyAlert();
-      }
-    }, 1700);
-  }
-
-  function setVoiceEnabled(enabled) {
-    currentVoiceEnabled = Boolean(enabled);
-    if (!currentVoiceEnabled) {
-      clearVoiceTimers();
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-      if (isPlayingSiren) applySirenGain(currentVolume, 0.12);
-    } else if (isPlayingSiren) {
-      startVoiceLoop();
-    }
-  }
-
-  function setDistanceContext(distanceText) {
-    if (distanceText) {
-      currentDistanceText = String(distanceText);
-    }
-  }
-
   function scheduleSirenSweep() {
     if (!ctx || !activeNodes) return;
     const now = ctx.currentTime;
@@ -164,56 +113,8 @@ export function createFloodAlarmEngine() {
     oscHarmonic.frequency.exponentialRampToValueAtTime(727, now + 0.92);
   }
 
-  function speakParodyAlert() {
-    if (!isPlayingSiren || !currentVoiceEnabled) return;
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-
-    try {
-      const synth = window.speechSynthesis;
-      synth.cancel();
-
-      const cleanDistance = currentDistanceText.replace(/cm/i, '').trim();
-      const spoken = cleanDistance && cleanDistance !== '---'
-        ? `Perhatian! Status banjir kritis! Jarak air tinggal ${cleanDistance} sentimeter. Warga harap segera selamatkan barang berharga dan gorengan!`
-        : 'Perhatian! Status banjir kritis! Harap segera selamatkan barang berharga dan gorengan!';
-
-      const utterance = new SpeechSynthesisUtterance(spoken);
-      const voices = synth.getVoices ? synth.getVoices() : [];
-      const idVoice = voices.find((v) => v.lang?.toLowerCase().startsWith('id'));
-      if (idVoice) {
-        utterance.voice = idVoice;
-      }
-      utterance.lang = idVoice?.lang || 'id-ID';
-      utterance.rate = 1.06;
-      utterance.pitch = 1.04;
-      utterance.volume = Math.min(1, currentVolume);
-
-      // Duck sirine sementara agar pengumuman suara terdengar jernih
-      applySirenGain(currentVolume * 0.16, 0.16);
-
-      const restore = () => {
-        if (voiceRestoreTimer) {
-          clearTimeout(voiceRestoreTimer);
-          voiceRestoreTimer = null;
-        }
-        if (isPlayingSiren) {
-          applySirenGain(currentVolume, 0.18);
-        }
-      };
-
-      utterance.onend = restore;
-      utterance.onerror = restore;
-      voiceRestoreTimer = setTimeout(restore, 5800);
-
-      synth.speak(utterance);
-    } catch {
-      // Abaikan jika speechSynthesis diblokir browser
-    }
-  }
-
-  async function startSiren({ volume = currentVolume, voiceEnabled = currentVoiceEnabled } = {}) {
+  async function startSiren({ volume = currentVolume } = {}) {
     currentVolume = Math.max(0.1, Math.min(1.0, Number(volume) || 1.0));
-    currentVoiceEnabled = Boolean(voiceEnabled);
 
     const audioCtx = ensureContext();
     if (!audioCtx) return false;
@@ -273,10 +174,6 @@ export function createFloodAlarmEngine() {
 
     cycleTimer = setInterval(scheduleSirenSweep, 940);
 
-    if (currentVoiceEnabled) {
-      startVoiceLoop();
-    }
-
     if (resumePromise) {
       await resumePromise;
       if (!isPlayingSiren || !activeNodes) {
@@ -301,15 +198,6 @@ export function createFloodAlarmEngine() {
     if (cycleTimer) {
       clearInterval(cycleTimer);
       cycleTimer = null;
-    }
-    clearVoiceTimers();
-
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // Abaikan error speechSynthesis
-      }
     }
 
     if (activeNodes) {
@@ -367,6 +255,9 @@ export function createFloodAlarmEngine() {
     limiterNode = null;
     compressorNode = null;
   }
+
+  function setVoiceEnabled() {}
+  function setDistanceContext() {}
 
   return {
     arm,

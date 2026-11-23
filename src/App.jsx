@@ -1,35 +1,40 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlarmControlBar } from './components/AlarmControlBar.jsx';
-import { DangerChallengeCard } from './components/DangerChallengeCard.jsx';
-import {
-  GaugeMark,
-  RefreshGlyph,
-} from './components/Icons.jsx';
-import { MapLibrePanel } from './components/MapLibrePanel.jsx';
+import { AlarmPanel } from './components/AlarmPanel.jsx';
+import { ExpoGame } from './components/ExpoGame.jsx';
+import { HistoryChart } from './components/HistoryChart.jsx';
+import { SensorMap } from './components/SensorMap.jsx';
 import { SettingsModal } from './components/SettingsModal.jsx';
-import { TelemetryPanel } from './components/TelemetryPanel.jsx';
+import { StatusHeader } from './components/StatusHeader.jsx';
+import { WaterGauge } from './components/WaterGauge.jsx';
 import { createFloodAlarmEngine } from './utils/alarmAudio.js';
 import { formatWibTime } from './utils/formatters.js';
 
 export default function App() {
   const [state, setState] = useState(null);
   const [fetchError, setFetchError] = useState(null);
+  const [errorDismissed, setErrorDismissed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [activeTab, setActiveTab] = useState('monitoring');
+  const [historyReadings, setHistoryReadings] = useState([]);
 
-  // State Alarm Sirine Keras & Pengumuman BMKG
+  // State Alarm Sirine Keras
   const [audioArmed, setAudioArmed] = useState(false);
   const [alarmEnabled, setAlarmEnabled] = useState(true);
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [alarmSensitivity, setAlarmSensitivity] = useState('bahaya'); // 'bahaya' (<= 9 cm) | 'kritis' (<= 5 cm)
   const [volumePercent, setVolumePercent] = useState(100);
   const [episodeSilenced, setEpisodeSilenced] = useState(false);
   const [isTestingAudio, setIsTestingAudio] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [isSerialConnected, setIsSerialConnected] = useState(false);
 
   const alarmEngineRef = useRef(null);
   const testTimerRef = useRef(null);
   const wasCriticalRef = useRef(false);
+  const serialPortRef = useRef(null);
+  const serialReaderRef = useRef(null);
+  const serialKeepReadingRef = useRef(false);
 
   if (!alarmEngineRef.current) {
     alarmEngineRef.current = createFloodAlarmEngine();
@@ -39,7 +44,7 @@ export default function App() {
     const engine = alarmEngineRef.current;
 
     const tryAutoArm = async (event) => {
-      if (event?.target?.closest?.('.alarm-bar, button')) {
+      if (event?.target?.closest?.('.alarm-panel, .alarm-bar, button, input')) {
         return;
       }
       const ok = await engine.arm();
@@ -70,6 +75,7 @@ export default function App() {
       const data = await res.json();
       setState(data);
       setFetchError(null);
+      setErrorDismissed(false);
     } catch (err) {
       setFetchError(err?.message || 'Tidak dapat terhubung ke server monitoring.');
     }
@@ -86,14 +92,63 @@ export default function App() {
     return () => clearInterval(clockTimer);
   }, []);
 
-  const pollIntervalMs = state?.config?.pollIntervalMs ?? 2000;
+  const pollIntervalMs = state?.config?.pollIntervalMs ?? 500;
 
+  // SSE /api/live stream untuk realtime updates
   useEffect(() => {
+    let es = null;
+    try {
+      es = new EventSource('/api/live');
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && typeof data === 'object') {
+            setState(data);
+            setFetchError(null);
+            setErrorDismissed(false);
+          }
+        } catch {
+          // Abaikan error parsing JSON stream
+        }
+      };
+    } catch {
+      // EventSource tidak didukung browser
+    }
+
+    const interval = Math.min(pollIntervalMs, 600);
     const pollId = setInterval(() => {
       loadStatus();
-    }, pollIntervalMs);
-    return () => clearInterval(pollId);
-  }, [pollIntervalMs, loadStatus]);
+    }, interval);
+
+    return () => {
+      if (es) {
+        es.close();
+      }
+      clearInterval(pollId);
+    };
+  }, [loadStatus, pollIntervalMs]);
+
+  // Buffer riwayat 30 sampai 60 pembacaan sensor
+  useEffect(() => {
+    const dist = state?.reading?.criterion?.distanceCm;
+    if (dist !== undefined && Number.isFinite(dist)) {
+      setHistoryReadings((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.distanceCm === dist && Date.now() - last.timestamp < 350) {
+          return prev;
+        }
+        const next = [
+          ...prev,
+          {
+            timestamp: Date.now(),
+            distanceCm: dist,
+            code: state.reading.criterion.code || 'AMAN',
+          },
+        ];
+        return next.slice(-60);
+      });
+    }
+  }, [state?.reading?.criterion?.distanceCm, state?.reading?.criterion?.code]);
 
   async function handleManualRefresh() {
     setRefreshing(true);
@@ -105,6 +160,7 @@ export default function App() {
       const data = await res.json();
       setState(data);
       setFetchError(null);
+      setErrorDismissed(false);
       setNowMs(Date.now());
     } catch (err) {
       setFetchError(err?.message || 'Gagal melakukan refresh manual.');
@@ -142,17 +198,119 @@ export default function App() {
   }
 
   const activeCode = state?.reading?.criterion?.code ?? null;
-  const isCriticalLive = Boolean(
-    activeCode === 'KRITIS' && state?.hardwareConnected === true
-  );
+  const isDeviceActive = Boolean(state?.hardwareConnected === true || isSerialConnected);
+  const isTriggerLevelMet =
+    alarmSensitivity === 'bahaya'
+      ? activeCode === 'KRITIS' || activeCode === 'BAHAYA'
+      : activeCode === 'KRITIS';
+  const isCriticalLive = Boolean(isTriggerLevelMet && isDeviceActive);
 
-  // Reset status silence otomatis setiap kali status keluar dari KRITIS
   useEffect(() => {
     if (wasCriticalRef.current && !isCriticalLive) {
       setEpisodeSilenced(false);
     }
     wasCriticalRef.current = isCriticalLive;
   }, [isCriticalLive]);
+
+  async function handleToggleSerial() {
+    if (isSerialConnected) {
+      serialKeepReadingRef.current = false;
+      try {
+        if (serialReaderRef.current) {
+          await serialReaderRef.current.cancel();
+        }
+        if (serialPortRef.current) {
+          await serialPortRef.current.close();
+        }
+      } catch {}
+      serialPortRef.current = null;
+      serialReaderRef.current = null;
+      setIsSerialConnected(false);
+      return;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.serial) {
+      alert('Browser ini belum mendukung Web Serial API. Gunakan Chrome, Brave, atau Edge untuk koneksi kabel USB langsung.');
+      return;
+    }
+
+    try {
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      serialPortRef.current = port;
+      serialKeepReadingRef.current = true;
+      setIsSerialConnected(true);
+
+      const textDecoder = new TextDecoderStream();
+      const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+      const reader = textDecoder.readable.getReader();
+      serialReaderRef.current = reader;
+
+      let buffer = '';
+      let consecutiveGlitch = 0;
+      let lastValidSerialDist = null;
+      (async () => {
+        try {
+          while (serialKeepReadingRef.current) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) {
+              buffer += value;
+              const lines = buffer.split('\n');
+              buffer = lines.pop();
+              for (const line of lines) {
+                const trimmed = line.trim();
+                let distNum = null;
+                if (trimmed.startsWith('TELEMETRY:')) {
+                  try {
+                    const parsed = JSON.parse(trimmed.slice(10));
+                    if (Number.isFinite(parsed.distance)) distNum = parsed.distance;
+                  } catch {}
+                } else {
+                  const m = trimmed.match(/Jarak:\s*([0-9.]+)\s*cm/i);
+                  if (m) distNum = parseFloat(m[1]);
+                }
+
+                if (distNum !== null) {
+                  // Filter spike 999 cm agar tidak loncat pada tampilan jika hanya sesaat
+                  if (distNum >= 999) {
+                    consecutiveGlitch++;
+                    if (consecutiveGlitch < 3 && lastValidSerialDist !== null) {
+                      distNum = lastValidSerialDist;
+                    }
+                  } else {
+                    consecutiveGlitch = 0;
+                    lastValidSerialDist = distNum;
+                  }
+
+                  fetch('/api/telemetry/push', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      distanceCm: distNum,
+                      sourceLabel: 'Kabel USB Langsung (0 ms)',
+                    }),
+                  }).catch(() => {});
+                }
+              }
+            }
+          }
+        } catch {
+          // Port serial ditutup
+        } finally {
+          setIsSerialConnected(false);
+          try { reader.releaseLock(); } catch {}
+          try { await readableStreamClosed.catch(() => {}); } catch {}
+          try { await port.close().catch(() => {}); } catch {}
+        }
+      })();
+    } catch (err) {
+      if (err.name !== 'NotFoundError') {
+        alert(`Gagal membuka port serial: ${err.message}`);
+      }
+      setIsSerialConnected(false);
+    }
+  }
 
   useEffect(() => {
     alarmEngineRef.current.setDistanceContext(state?.reading?.criterion?.displayDistance);
@@ -162,11 +320,6 @@ export default function App() {
     alarmEngineRef.current.setVolume(volumePercent / 100);
   }, [volumePercent]);
 
-  useEffect(() => {
-    alarmEngineRef.current.setVoiceEnabled(voiceEnabled);
-  }, [voiceEnabled]);
-
-  // Jalankan atau hentikan sirine keras sesuai kondisi KRITIS atau mode tes
   useEffect(() => {
     const engine = alarmEngineRef.current;
     const shouldPlayCritical =
@@ -186,7 +339,6 @@ export default function App() {
       engine
         .startSiren({
           volume: volumePercent / 100,
-          voiceEnabled: shouldPlayCritical ? voiceEnabled : false,
         })
         .then((started) => {
           if (!cancelled) {
@@ -208,7 +360,6 @@ export default function App() {
     episodeSilenced,
     isTestingAudio,
     volumePercent,
-    voiceEnabled,
   ]);
 
   async function handleArmAudio() {
@@ -216,7 +367,6 @@ export default function App() {
     if (isCriticalLive && alarmEnabled && !episodeSilenced) {
       const started = await engine.startSiren({
         volume: volumePercent / 100,
-        voiceEnabled,
       });
       setAudioArmed(started || engine.isArmed());
       setIsPlayingAudio(Boolean(started));
@@ -260,10 +410,8 @@ export default function App() {
       testTimerRef.current = null;
     }
 
-    // Panggil startSiren langsung pada click handler agar browser mengizinkan AudioContext berbunyi
     const started = await engine.startSiren({
       volume: volumePercent / 100,
-      voiceEnabled: false,
     });
 
     if (started) {
@@ -287,60 +435,53 @@ export default function App() {
     }
   }
 
-  let connectionPill = 'Menghubungkan...';
-  if (state) {
-    if (state.hardwareConnected) {
-      connectionPill = 'ESP32 Online';
-    } else if (state.connectionState === 'offline') {
-      connectionPill = 'ESP32 Offline';
-    } else if (state.connectionState === 'unconfigured') {
-      connectionPill = 'Blynk Belum Diatur';
-    } else {
-      connectionPill = 'Live Blynk';
-    }
-  }
+  const hasTrueConnectionProblem = Boolean(
+    fetchError ||
+    (state && state.connectionState === 'error') ||
+    (state && state.connectionState === 'offline' && !state.reading)
+  );
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="topbar-brand-row">
-          <div className="brand-lockup">
-            <div className="brand-icon">
-              <GaugeMark />
-            </div>
-            <div>
-              <h1 className="brand-title">Pantau Banjir ESP32</h1>
-              <p className="brand-subtitle">
-                Early Warning Ketinggian Air, Prediksi Banjir &amp; Peta Lokasi
-              </p>
-            </div>
-          </div>
-          <span className="source-tag mono">{connectionPill}</span>
-        </div>
-
-        <nav className="topbar-controls" aria-label="Kontrol monitoring">
-          <button
-            type="button"
-            className="btn"
-            onClick={handleManualRefresh}
-            disabled={refreshing}
-          >
-            <RefreshGlyph />
-            <span>{refreshing ? 'Menyegarkan...' : 'Refresh'}</span>
-          </button>
-        </nav>
-      </header>
+    <div className={`app-shell theme-control-room status-theme--${(activeCode || 'aman').toLowerCase()}`}>
+      <StatusHeader
+        state={state}
+        isSerialConnected={isSerialConnected}
+        refreshing={refreshing}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onRefresh={handleManualRefresh}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
       <main id="main-content" tabIndex={-1} className="main-content">
-        {fetchError && (
-          <section className="state-banner state-banner--error" role="alert">
-            <h2 className="state-banner-title">Koneksi ke Server Backend Terputus</h2>
-            <p className="state-banner-desc">
-              {fetchError}. Pastikan server backend berjalan (`npm run dev`).
-            </p>
+        {/* Banner Masalah Koneksi: Hanya muncul jika ada masalah nyata dan bisa ditutup */}
+        {hasTrueConnectionProblem && !errorDismissed && (
+          <section className="state-banner state-banner--error dismissible-banner" role="alert">
+            <div className="banner-content">
+              <h2 className="state-banner-title">
+                {fetchError ? 'Koneksi ke Server Backend Terputus' : 'Koneksi Blynk / ESP32 Terkendala'}
+              </h2>
+              <p className="state-banner-desc">
+                {fetchError || state?.errorMessage || 'Periksa koneksi ESP32 atau jalankan backend (`npm run dev`).'}
+                {state?.lastAttemptAt && ` (Percobaan: ${formatWibTime(state.lastAttemptAt)})`}
+              </p>
+            </div>
             <div className="state-banner-actions">
-              <button type="button" className="btn btn-primary" onClick={handleManualRefresh}>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleManualRefresh}
+                disabled={refreshing}
+              >
                 Coba Hubungkan Ulang
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setErrorDismissed(true)}
+                aria-label="Tutup pemberitahuan"
+              >
+                Tutup
               </button>
             </div>
           </section>
@@ -350,7 +491,7 @@ export default function App() {
           <section className="state-banner" role="status" aria-live="polite">
             <h2 className="state-banner-title">Memuat Data Monitoring...</h2>
             <p className="state-banner-desc">
-              Menghubungi backend lokal untuk mengambil status sensor ultrasonik dan peta GPS.
+              Menghubungi backend untuk mengambil status sensor ultrasonik dan peta GPS.
             </p>
           </section>
         )}
@@ -374,98 +515,90 @@ export default function App() {
           </section>
         )}
 
-        {state &&
-          (state.connectionState === 'error' || state.connectionState === 'offline') && (
-            <section
-              className={`state-banner ${
-                state.connectionState === 'error'
-                  ? 'state-banner--error'
-                  : 'state-banner--warning'
-              }`}
-              role="alert"
-            >
-              <h2 className="state-banner-title">
-                {state.connectionState === 'error'
-                  ? 'Gagal Mengambil Data dari Blynk Cloud'
-                  : 'Perangkat ESP32 Sedang Offline'}
-              </h2>
-              <p className="state-banner-desc">
-                {state.errorMessage || 'Periksa koneksi internet ESP32 dan Auth Token Blynk.'}
-                {state.lastAttemptAt && ` (Percobaan terakhir: ${formatWibTime(state.lastAttemptAt)})`}
-              </p>
-              <div className="state-banner-actions">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={handleManualRefresh}
-                  disabled={refreshing}
-                >
-                  Coba Refresh Sekarang
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => setSettingsOpen(true)}
-                >
-                  Cek Pengaturan Blynk
-                </button>
-              </div>
-            </section>
-          )}
-
-        {state && state.connectionState === 'loading' && !state.reading && (
-          <section className="state-banner" role="status" aria-live="polite">
-            <h2 className="state-banner-title">Menunggu Pembacaan Pertama dari Blynk...</h2>
-            <p className="state-banner-desc">
-              Sedang mengambil nilai virtual pin V0..V5 dari server {state.config.blynkServer}.
-            </p>
-          </section>
-        )}
-
+        {/* BENTO GRID DASHBOARD */}
         {state && (
-          <AlarmControlBar
-            audioArmed={audioArmed}
-            alarmEnabled={alarmEnabled}
-            voiceEnabled={voiceEnabled}
-            volumePercent={volumePercent}
-            isCriticalLive={isCriticalLive}
-            isPlaying={isPlayingAudio}
-            episodeSilenced={episodeSilenced}
-            isTesting={isTestingAudio}
-            onArmAudio={handleArmAudio}
-            onToggleAlarmEnabled={handleToggleAlarmEnabled}
-            onToggleVoiceEnabled={setVoiceEnabled}
-            onVolumeChange={setVolumePercent}
-            onSilenceEpisode={() => setEpisodeSilenced(true)}
-            onResumeEpisode={() => setEpisodeSilenced(false)}
-            onToggleTestSiren={handleToggleTestSiren}
-          />
-        )}
+          <div className={`bento-dashboard-grid bento-mode--${activeTab}`}>
+            {activeTab === 'monitoring' ? (
+              <>
+                {/* Kolom Kiri: Hero Status Air (~60% lebar pada desktop) */}
+                <div className="bento-area-hero">
+                  <WaterGauge state={state} nowMs={nowMs} />
+                </div>
 
-        {state && state.reading && (
-          <TelemetryPanel state={state} nowMs={nowMs} />
-        )}
+                {/* Kolom Kanan: Riwayat Grafik & Peta Lokasi */}
+                <div className="bento-area-side">
+                  <HistoryChart history={historyReadings} />
+                  <SensorMap state={state} onSaveConfig={handleSaveConfig} />
+                </div>
 
-        {state && (
-          <DangerChallengeCard
-            state={state}
-            onChallengeWin={handleChallengeWin}
-          />
-        )}
+                {/* Baris Bawah: Panel Alarm Sirine & Akses Cepat Tantangan Expo */}
+                <div className="bento-area-alarm">
+                  <AlarmPanel
+                    audioArmed={audioArmed}
+                    alarmEnabled={alarmEnabled}
+                    alarmSensitivity={alarmSensitivity}
+                    volumePercent={volumePercent}
+                    isCriticalLive={isCriticalLive}
+                    isPlaying={isPlayingAudio}
+                    episodeSilenced={episodeSilenced}
+                    isTesting={isTestingAudio}
+                    isSerialConnected={isSerialConnected}
+                    onArmAudio={handleArmAudio}
+                    onToggleAlarmEnabled={handleToggleAlarmEnabled}
+                    onToggleAlarmSensitivity={setAlarmSensitivity}
+                    onToggleSerial={handleToggleSerial}
+                    onVolumeChange={setVolumePercent}
+                    onSilenceEpisode={() => setEpisodeSilenced(true)}
+                    onResumeEpisode={() => setEpisodeSilenced(false)}
+                    onToggleTestSiren={handleToggleTestSiren}
+                  />
+                </div>
 
-        {state && (
-          <MapLibrePanel state={state} onSaveConfig={handleSaveConfig} />
+                <div className="bento-area-expo">
+                  <ExpoGame state={state} onChallengeWin={handleChallengeWin} />
+                </div>
+              </>
+            ) : (
+              /* Mode Mini-Game Expo Khusus */
+              <>
+                <div className="bento-area-expo-primary">
+                  <ExpoGame state={state} onChallengeWin={handleChallengeWin} />
+                </div>
+                <div className="bento-area-expo-side">
+                  <WaterGauge state={state} nowMs={nowMs} />
+                  <AlarmPanel
+                    audioArmed={audioArmed}
+                    alarmEnabled={alarmEnabled}
+                    alarmSensitivity={alarmSensitivity}
+                    volumePercent={volumePercent}
+                    isCriticalLive={isCriticalLive}
+                    isPlaying={isPlayingAudio}
+                    episodeSilenced={episodeSilenced}
+                    isTesting={isTestingAudio}
+                    isSerialConnected={isSerialConnected}
+                    onArmAudio={handleArmAudio}
+                    onToggleAlarmEnabled={handleToggleAlarmEnabled}
+                    onToggleAlarmSensitivity={setAlarmSensitivity}
+                    onToggleSerial={handleToggleSerial}
+                    onVolumeChange={setVolumePercent}
+                    onSilenceEpisode={() => setEpisodeSilenced(true)}
+                    onResumeEpisode={() => setEpisodeSilenced(false)}
+                    onToggleTestSiren={handleToggleTestSiren}
+                  />
+                </div>
+              </>
+            )}
+          </div>
         )}
       </main>
 
       <footer className="app-footer">
-        <span>Ambang Sensor: AMAN &gt; 10 cm, WASPADA &gt; 7 cm, BAHAYA &gt; 3 cm, KRITIS &lt;= 3 cm</span>
-        <span>
-          Auto-refresh:{' '}
-          <strong className="mono">
-            Aktif tiap {Math.round(pollIntervalMs / 1000)} dtk
-          </strong>
-        </span>
+        <div className="footer-thresholds">
+          <span className="mono">Ambang Sensor: AMAN &gt; 12 cm, WASPADA &gt; 9 cm, BAHAYA &gt; 5 cm, KRITIS &lt;= 5 cm</span>
+        </div>
+        <div className="footer-sync">
+          <span>Auto-refresh: <strong className="mono">Aktif tiap {Math.round(pollIntervalMs / 1000)} dtk</strong></span>
+        </div>
       </footer>
 
       {state && (

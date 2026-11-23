@@ -7,46 +7,46 @@ export const CRITERIA_LEVELS = [
   {
     code: 'AMAN',
     label: 'AMAN',
-    ruleText: 'Jarak > 10 cm',
-    ledName: 'LED Hijau (GPIO 27)',
+    ruleText: 'Jarak > 12 cm',
+    ledName: 'LED Hijau (GPIO 2)',
     ledColor: 'green',
     buzzerBehavior: 'Mati (noTone)',
     telegramPolicy: 'Tidak kirim notif alarm',
     description: 'Permukaan air masih berada di zona aman di bawah sensor.',
-    matches: (distance) => distance > 10,
+    matches: (distance) => distance > 12,
   },
   {
     code: 'WASPADA',
     label: 'WASPADA',
-    ruleText: '7 cm < Jarak <= 10 cm',
-    ledName: 'LED Kuning (GPIO 33)',
+    ruleText: '9 cm < Jarak <= 12 cm',
+    ledName: 'LED Kuning (GPIO 2+4)',
     ledColor: 'yellow',
     buzzerBehavior: 'Beep 2000 Hz (70 ms ON, 530 ms OFF)',
     telegramPolicy: 'Pantau (belum kirim notif)',
     description: 'Air mulai naik mendekati sensor, pengawasan aktif diperlukan.',
-    matches: (distance) => distance > 7 && distance <= 10,
+    matches: (distance) => distance > 9 && distance <= 12,
   },
   {
     code: 'BAHAYA',
     label: 'BAHAYA',
-    ruleText: '3 cm < Jarak <= 7 cm',
-    ledName: 'LED Merah (GPIO 32)',
+    ruleText: '5 cm < Jarak <= 9 cm',
+    ledName: 'LED Merah / Oranye (GPIO 4)',
     ledColor: 'orange',
     buzzerBehavior: 'Beep cepat adaptif 2000 Hz (jeda 80-350 ms)',
     telegramPolicy: 'Siaga tinggi',
     description: 'Air semakin dekat ke sensor, buzzer berbunyi lebih cepat seiring jarak menyempit.',
-    matches: (distance) => distance > 3 && distance <= 7,
+    matches: (distance) => distance > 5 && distance <= 9,
   },
   {
     code: 'KRITIS',
     label: 'KRITIS',
-    ruleText: 'Jarak <= 3 cm',
-    ledName: 'LED Merah (GPIO 32)',
+    ruleText: 'Jarak <= 5 cm',
+    ledName: 'LED Merah (GPIO 4)',
     ledColor: 'red',
     buzzerBehavior: 'Melodi alarm 8 nada (1000-1800 Hz)',
     telegramPolicy: 'Kirim notifikasi Telegram otomatis',
     description: 'Kondisi darurat! Permukaan air sangat dekat dengan sensor ultrasonik.',
-    matches: (distance) => distance <= 3,
+    matches: (distance) => distance <= 5,
   },
 ];
 
@@ -62,10 +62,10 @@ export const GPS_STATES = {
  * @returns {number|null}
  */
 export function computeDangerBeepIntervalMs(distanceCm) {
-  if (!Number.isFinite(distanceCm) || distanceCm <= 3 || distanceCm > 7) {
+  if (!Number.isFinite(distanceCm) || distanceCm <= 5 || distanceCm > 9) {
     return null;
   }
-  const mapped = Math.trunc(((distanceCm - 3) * (350 - 80)) / (7 - 3) + 80);
+  const mapped = Math.trunc(((distanceCm - 5) * (350 - 80)) / (9 - 5) + 80);
   return Math.min(350, Math.max(80, mapped));
 }
 
@@ -198,17 +198,17 @@ export function computeFloodPrediction(history, currentDistanceCm) {
   const riseRateCmPerSec = Number((-distanceSlope).toFixed(2));
 
   if (riseRateCmPerSec >= 0.03) {
-    if (currentDistanceCm <= 3) {
+    if (currentDistanceCm <= 5) {
       return {
         trend: 'NAIK',
         riseRateCmPerSec,
         etaToCriticalSec: 0,
         sampleCount: n,
-        statusText: 'Batas KRITIS (<= 3.0 cm) sudah tercapai.',
+        statusText: 'Batas KRITIS (<= 5.0 cm) sudah tercapai.',
       };
     }
 
-    const rawEtaSec = (currentDistanceCm - 3) / riseRateCmPerSec;
+    const rawEtaSec = (currentDistanceCm - 5) / riseRateCmPerSec;
     if (!Number.isFinite(rawEtaSec) || rawEtaSec > 1800) {
       return {
         trend: 'NAIK',

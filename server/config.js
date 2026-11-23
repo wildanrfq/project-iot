@@ -40,8 +40,8 @@ export function loadInitialConfig() {
 
   const pollIntervalMs = clampInt(
     saved.pollIntervalMs ?? process.env.POLL_INTERVAL_MS,
-    2000,
-    1000,
+    500,
+    300,
     30000
   );
 

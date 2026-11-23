@@ -17,21 +17,21 @@ import {
 } from '../server/telegram.js';
 
 test('evaluateDistanceCriterion mengikuti ambang main.ino dengan tepat', () => {
-  assert.equal(evaluateDistanceCriterion(10.1).code, 'AMAN');
+  assert.equal(evaluateDistanceCriterion(12.1).code, 'AMAN');
   assert.equal(evaluateDistanceCriterion(999).code, 'AMAN');
   assert.equal(evaluateDistanceCriterion(999).displayDistance, '--- cm');
   assert.equal(evaluateDistanceCriterion(999).isTimeout, true);
 
-  assert.equal(evaluateDistanceCriterion(10.0).code, 'WASPADA');
-  assert.equal(evaluateDistanceCriterion(7.1).code, 'WASPADA');
+  assert.equal(evaluateDistanceCriterion(12.0).code, 'WASPADA');
+  assert.equal(evaluateDistanceCriterion(9.1).code, 'WASPADA');
 
-  assert.equal(evaluateDistanceCriterion(7.0).code, 'BAHAYA');
-  assert.equal(evaluateDistanceCriterion(3.1).code, 'BAHAYA');
-  assert.equal(computeDangerBeepIntervalMs(5), 215);
+  assert.equal(evaluateDistanceCriterion(9.0).code, 'BAHAYA');
+  assert.equal(evaluateDistanceCriterion(5.1).code, 'BAHAYA');
+  assert.equal(computeDangerBeepIntervalMs(7), 215);
 
-  assert.equal(evaluateDistanceCriterion(3.0).code, 'KRITIS');
+  assert.equal(evaluateDistanceCriterion(5.0).code, 'KRITIS');
   assert.equal(evaluateDistanceCriterion(0.5).code, 'KRITIS');
-  assert.equal(evaluateDistanceCriterion(3.0).isCritical, true);
+  assert.equal(evaluateDistanceCriterion(5.0).isCritical, true);
 });
 
 test('monitor service mengirim notifikasi Telegram saat masuk KRITIS dan menahan spam dengan cooldown', async () => {
@@ -377,14 +377,14 @@ test('computeFloodPrediction menghitung laju kenaikan air dan ETA menuju KRITIS 
   );
   assert.equal(timeoutState.trend, 'UNKNOWN');
 
-  // Air naik 6 cm dalam 4 detik -> laju 1.5 cm/dtk; dari 6 cm menuju 3 cm butuh 2 detik
+  // Air naik 6 cm dalam 4 detik -> laju 1.5 cm/dtk; dari 8 cm menuju 5 cm butuh 2 detik
   const rising = computeFloodPrediction(
     [
-      { timestampMs: 0, distanceCm: 12.0 },
-      { timestampMs: 2000, distanceCm: 9.0 },
-      { timestampMs: 4000, distanceCm: 6.0 },
+      { timestampMs: 0, distanceCm: 14.0 },
+      { timestampMs: 2000, distanceCm: 11.0 },
+      { timestampMs: 4000, distanceCm: 8.0 },
     ],
-    6.0
+    8.0
   );
   assert.equal(rising.trend, 'NAIK');
   assert.equal(rising.riseRateCmPerSec, 1.5);

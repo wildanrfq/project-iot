@@ -8,18 +8,36 @@
 #define ECHO_PIN 18
 #define BUZZER_PIN 21
 
-#define LED_RED 22
-#define LED_YELLOW 23
-#define LED_GREEN 19
+// ===== Konfigurasi Pin RGB LED (1 Lampu 4 Pin: GND, R, G, B - Common Cathode) =====
+#define RGB_RED_PIN   22
+#define RGB_GREEN_PIN 19
+#define RGB_BLUE_PIN  23
+
+#define LED_RED    RGB_RED_PIN
+#define LED_GREEN  RGB_GREEN_PIN
+#define LED_BLUE   RGB_BLUE_PIN
+
+// Fungsi pengatur warna RGB LED (Common Cathode: 0 = mati, 255 = maksimal)
+void setRgbColor(uint8_t red, uint8_t green, uint8_t blue) {
+  analogWrite(RGB_RED_PIN, red);
+  analogWrite(RGB_GREEN_PIN, green);
+  analogWrite(RGB_BLUE_PIN, blue);
+}
 
 // ===== Pin baru =====
 // OLED I2C (pakai pin custom karena GPIO 21 & 22 sudah dipakai buzzer & LED)
 #define OLED_SDA 25
 #define OLED_SCL 26
 
-// GPS (UART2 ESP32)
+// GPS (UART2 untuk ESP32 biasa, UART1 untuk ESP32-C3)
 #define GPS_RX 15   // dihubungkan ke TX GPS
 #define GPS_TX 34   // dihubungkan ke RX GPS
+
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ARDUINO_ESP32C3_DEV) || (defined(SOC_UART_NUM) && SOC_UART_NUM < 3)
+  #define GPS_SERIAL Serial1
+#else
+  #define GPS_SERIAL Serial2
+#endif
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -57,9 +75,10 @@ void setup() {
   pinMode(ECHO_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
-  pinMode(LED_RED, OUTPUT);
-  pinMode(LED_YELLOW, OUTPUT);
-  pinMode(LED_GREEN, OUTPUT);
+  pinMode(RGB_RED_PIN, OUTPUT);
+  pinMode(RGB_GREEN_PIN, OUTPUT);
+  pinMode(RGB_BLUE_PIN, OUTPUT);
+  setRgbColor(0, 0, 255); // BIRU saat booting
 
   // OLED
   Wire.begin(OLED_SDA, OLED_SCL);
@@ -76,8 +95,8 @@ void setup() {
   display.display();
 
   // GPS (buffer diperbesar supaya data tidak hilang saat delay)
-  Serial2.setRxBufferSize(1024);
-  Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
+  GPS_SERIAL.setRxBufferSize(1024);
+  GPS_SERIAL.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
 }
 
 void updateOLED() {
@@ -128,38 +147,76 @@ void updateOLED() {
   display.display();
 }
 
-void loop() {
-  // Baca data GPS yang masuk
-  while (Serial2.available()) {
-    gps.encode(Serial2.read());
-  }
+// Buffer filter glitch dan penolakan outlier jarak
+float lastValidDistance = 17.0;
+int consecutiveTimeouts = 0;
 
-  // Membaca sensor ultrasonik
+float measureSingleDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
-
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  long dur = pulseIn(ECHO_PIN, HIGH, 25000);
+  if (dur == 0) return -1.0;
+  float cm = (float)dur * 0.0343 / 2.0;
+  if (cm < 1.0 || cm > 400.0) return -1.0;
+  return cm;
+}
 
-  if (duration == 0) {
-    distance = 999;
-  } else {
-    distance = duration * 0.0343 / 2;
+float getFilteredDistance() {
+  float samples[3];
+  int validCount = 0;
+
+  for (int i = 0; i < 3; i++) {
+    float s = measureSingleDistance();
+    if (s > 0) {
+      samples[validCount++] = s;
+    }
+    if (i < 2) delay(6);
   }
 
+  if (validCount > 0) {
+    for (int i = 0; i < validCount - 1; i++) {
+      for (int j = i + 1; j < validCount; j++) {
+        if (samples[i] > samples[j]) {
+          float tmp = samples[i];
+          samples[i] = samples[j];
+          samples[j] = tmp;
+        }
+      }
+    }
+    float median = samples[validCount / 2];
+    lastValidDistance = median;
+    consecutiveTimeouts = 0;
+    return median;
+  }
+
+  consecutiveTimeouts++;
+  if (consecutiveTimeouts < 5) {
+    return lastValidDistance;
+  }
+  return 999.0;
+}
+
+void loop() {
+  // Baca data GPS yang masuk
+  while (GPS_SERIAL.available()) {
+    gps.encode(GPS_SERIAL.read());
+  }
+
+  // Membaca sensor ultrasonik dengan filter anti-glitch
+  distance = getFilteredDistance();
+
   Serial.print("Jarak: ");
-  Serial.print(distance);
+  Serial.print(distance, 1);
   Serial.println(" cm");
 
   // Kondisi aman
-  if (distance > 10) {
+  if (distance > 12) {
     status = "AMAN";
-    digitalWrite(LED_GREEN, HIGH);
-    digitalWrite(LED_YELLOW, LOW);
-    digitalWrite(LED_RED, LOW);
+    setRgbColor(0, 255, 0); // HIJAU
 
     noTone(BUZZER_PIN);
 
@@ -170,11 +227,9 @@ void loop() {
   }
 
   // Kondisi waspada
-  else if (distance > 7) {
+  else if (distance > 9) {
     status = "WASPADA";
-    digitalWrite(LED_GREEN, LOW);
-    digitalWrite(LED_YELLOW, HIGH);
-    digitalWrite(LED_RED, LOW);
+    setRgbColor(255, 180, 0); // KUNING
 
     updateOLED();
     tone(BUZZER_PIN, 2000);
@@ -184,13 +239,11 @@ void loop() {
   }
 
   // Kondisi bahaya
-  else if (distance > 3) {
+  else if (distance > 5) {
     status = "BAHAYA";
-    digitalWrite(LED_GREEN, LOW);
-    digitalWrite(LED_YELLOW, LOW);
-    digitalWrite(LED_RED, HIGH);
+    setRgbColor(255, 0, 0); // MERAH
 
-    int interval = map(distance, 3, 7, 80, 350);
+    int interval = map(distance, 5, 9, 80, 350);
     interval = constrain(interval, 80, 350);
 
     updateOLED();
@@ -203,9 +256,7 @@ void loop() {
   // Kondisi sangat dekat: memainkan melodi
   else {
     status = "KRITIS";
-    digitalWrite(LED_GREEN, LOW);
-    digitalWrite(LED_YELLOW, LOW);
-    digitalWrite(LED_RED, HIGH);
+    setRgbColor(255, 0, 0); // MERAH
 
     updateOLED();
 

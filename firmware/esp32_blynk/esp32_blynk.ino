@@ -18,38 +18,63 @@
 #include <TinyGPSPlus.h>
 
 // ===== Kredensial WiFi (ISI SESUAI HOTSPOT / ROUTER ANDA) =====
-const char* WIFI_SSID = "MAKINUL AMIN 1";
+const char* WIFI_SSID = "MAKINUL AMIN 1"; 
 const char* WIFI_PASS = "h2sannyatha";
 
-// ===== Konfigurasi Pin Terbaru (sama persis dengan test_ledaa_oled_gps.ino) =====
+// ===== Konfigurasi Pin Sensor & Aktuator =====
 #define TRIG_PIN 5
-#define ECHO_PIN 18
-#define BUZZER_PIN 21
+#define ECHO_PIN 6
+#define BUZZER_PIN 1
 
-#define LED_RED 32
-#define LED_YELLOW 33
-#define LED_GREEN 27
+// ===== Konfigurasi Pin RGB LED (1 Lampu 4 Pin: GND, R, G, B - Common Cathode) =====
+// Hubungkan:
+//   - Pin GND pada RGB LED -> GND ESP32
+//   - Pin R pada RGB LED   -> GPIO 4 (melalui resistor 220-330 ohm jika ada)
+//   - Pin G pada RGB LED   -> GPIO 3 (melalui resistor 220-330 ohm jika ada)
+//   - Pin B pada RGB LED   -> GPIO 2 (melalui resistor 220-330 ohm jika ada)
+#define RGB_RED_PIN   4
+#define RGB_GREEN_PIN 3
+#define RGB_BLUE_PIN  2
 
-// OLED I2C (pin custom karena GPIO 21 & 22 dipakai buzzer & LED)
-#define OLED_SDA 25
-#define OLED_SCL 26
+// Alias untuk kompatibilitas lama
+#define LED_RED    RGB_RED_PIN
+#define LED_GREEN  RGB_GREEN_PIN
+#define LED_BLUE   RGB_BLUE_PIN
+
+// ===== Konfigurasi Pin OLED & GPS berdasarkan Chip (ESP32-C3 vs ESP32 Klasik) =====
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ARDUINO_ESP32C3_DEV) || (defined(SOC_GPIO_PIN_COUNT) && SOC_GPIO_PIN_COUNT <= 22)
+  // ESP32-C3: GPIO hanya 0 sampai 21. Default I2C: SDA=8, SCL=9. UART1: RX=20, TX=21
+  #define OLED_SDA 8
+  #define OLED_SCL 9
+  #define GPS_RX   20  // dihubungkan ke TX GPS
+  #define GPS_TX   21  // dihubungkan ke RX GPS
+  #define GPS_SERIAL Serial1
+#else
+  // ESP32 Klasik (WROOM): GPIO 25, 26, 16, 17
+  #define OLED_SDA 25
+  #define OLED_SCL 26
+  #define GPS_RX   16
+  #define GPS_TX   17
+  #define GPS_SERIAL Serial2
+#endif
+
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_ADDRESS 0x3C
-
-// GPS (UART2 ESP32)
-#define GPS_RX 16  // dihubungkan ke TX GPS
-#define GPS_TX 17   // dihubungkan ke RX GPS
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 TinyGPSPlus gps;
 BlynkTimer timer;
 
+bool oledFound = false;
 long duration = 0;
 float distance = 999.0;
 const char* status = "AMAN";
+const char* prevStatus = "AMAN";
+float prevDistance = 999.0;
+unsigned long lastBlynkSend = 0;
 
-// Melodi alarm untuk status KRITIS (distance <= 3 cm)
+// Melodi alarm untuk status KRITIS (distance <= 5 cm)
 int melody[] = {
   1000, 1200, 1500, 1200,
   1000, 1500, 1800, 1500
@@ -81,53 +106,115 @@ const char* getGpsStateString() {
   return "CARI_SATELIT";
 }
 
-void readUltrasonicAndEvaluate() {
+// Fungsi pengatur warna RGB LED (Common Cathode: 0 = mati, 255 = maksimal)
+void setRgbColor(uint8_t red, uint8_t green, uint8_t blue) {
+  analogWrite(RGB_RED_PIN, red);
+  analogWrite(RGB_GREEN_PIN, green);
+  analogWrite(RGB_BLUE_PIN, blue);
+}
+
+// Buffer filter glitch dan penolakan outlier jarak
+float lastValidDistance = 17.0;
+int consecutiveTimeouts = 0;
+
+float measureSingleDistance() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  duration = pulseIn(ECHO_PIN, HIGH, 30000);
-  if (duration == 0) {
-    distance = 999.0;
-  } else {
-    distance = duration * 0.0343 / 2.0;
+  // Timeout 25000 mikrodetik (~4.2 meter, batas fisik HC-SR04)
+  long dur = pulseIn(ECHO_PIN, HIGH, 25000);
+  if (dur == 0) return -1.0;
+  float cm = (float)dur * 0.0343 / 2.0;
+  if (cm < 1.0 || cm > 400.0) return -1.0; // Tolak nilai noise tidak realistis
+  return cm;
+}
+
+float getFilteredDistance() {
+  float samples[3];
+  int validCount = 0;
+
+  for (int i = 0; i < 3; i++) {
+    float s = measureSingleDistance();
+    if (s > 0) {
+      samples[validCount++] = s;
+    }
+    if (i < 2) delay(6); // Jeda singkat antar pulsa agar tidak ada interferensi gema
   }
 
-  Serial.print("Jarak: ");
-  Serial.print(distance);
-  Serial.println(" cm");
+  // Jika setidaknya ada 1 pembacaan valid, gunakan median / nilai valid
+  if (validCount > 0) {
+    for (int i = 0; i < validCount - 1; i++) {
+      for (int j = i + 1; j < validCount; j++) {
+        if (samples[i] > samples[j]) {
+          float tmp = samples[i];
+          samples[i] = samples[j];
+          samples[j] = tmp;
+        }
+      }
+    }
+    float median = samples[validCount / 2];
+    lastValidDistance = median;
+    consecutiveTimeouts = 0;
+    return median;
+  }
 
-  if (distance > 10.0) {
+  // Jika ketiga sampel gagal bersamaan (pantulan meleset sesaat):
+  consecutiveTimeouts++;
+  if (consecutiveTimeouts < 5) {
+    // Pertahankan jarak valid terakhir agar tidak loncat ke 999 cm
+    return lastValidDistance;
+  }
+
+  // Jika benar-benar kosong/timeout terus menerus >= 5 kali (> 500 ms)
+  return 999.0;
+}
+
+void readUltrasonicAndEvaluate() {
+  distance = getFilteredDistance();
+
+  if (distance > 12.0) {
     status = "AMAN";
-    digitalWrite(LED_GREEN, HIGH);
-    digitalWrite(LED_YELLOW, LOW);
-    digitalWrite(LED_RED, LOW);
+    setRgbColor(0, 255, 0); // HIJAU
     noTone(BUZZER_PIN);
     beepActive = false;
     noteIndex = 0;
     playingNote = false;
-  } else if (distance > 7.0) {
+  } else if (distance > 9.0) {
     status = "WASPADA";
-    digitalWrite(LED_GREEN, LOW);
-    digitalWrite(LED_YELLOW, HIGH);
-    digitalWrite(LED_RED, LOW);
+    setRgbColor(255, 180, 0); // KUNING (Red + Green)
     noteIndex = 0;
     playingNote = false;
-  } else if (distance > 3.0) {
+  } else if (distance > 5.0) {
     status = "BAHAYA";
-    digitalWrite(LED_GREEN, LOW);
-    digitalWrite(LED_YELLOW, LOW);
-    digitalWrite(LED_RED, HIGH);
+    setRgbColor(255, 0, 0); // MERAH
     noteIndex = 0;
     playingNote = false;
   } else {
     status = "KRITIS";
-    digitalWrite(LED_GREEN, LOW);
-    digitalWrite(LED_YELLOW, LOW);
-    digitalWrite(LED_RED, HIGH);
+    setRgbColor(255, 0, 0); // MERAH
     beepActive = false;
+  }
+
+  Serial.print("Jarak: ");
+  Serial.print(distance, 1);
+  Serial.print(" cm | Status: ");
+  Serial.println(status);
+
+  // Output format telemetry standar untuk Web Serial API / Direct USB (0 ms latency)
+  Serial.print("TELEMETRY:{\"distance\":");
+  Serial.print(distance, 1);
+  Serial.print(",\"status\":\"");
+  Serial.print(status);
+  Serial.println("\"}");
+
+  // Kirim seketika ke Blynk (hanya V0 & V1 tanpa beban GPS) jika status berubah atau jarak bergeser >= 1.0 cm
+  bool statusChanged = (strcmp(status, prevStatus) != 0);
+  bool distanceJumped = (fabs(distance - prevDistance) >= 1.0);
+  if ((statusChanged || distanceJumped) && (millis() - lastBlynkSend >= 200)) {
+    sendFastTelemetryToBlynk();
   }
 }
 
@@ -153,7 +240,7 @@ void handleBuzzerNonBlocking() {
   }
 
   if (strcmp(status, "BAHAYA") == 0) {
-    int interval = map((long)distance, 3, 7, 80, 350);
+    int interval = map((long)distance, 5, 9, 80, 350);
     interval = constrain(interval, 80, 350);
     unsigned long waitMs = beepActive ? 70 : (unsigned long)interval;
     if (now - lastBeepToggle >= waitMs) {
@@ -181,6 +268,7 @@ void handleBuzzerNonBlocking() {
 }
 
 void updateOLED() {
+  if (!oledFound) return;
   if (millis() - lastOledTime < 500) return;
   lastOledTime = millis();
 
@@ -232,6 +320,15 @@ void updateOLED() {
   display.display();
 }
 
+void sendFastTelemetryToBlynk() {
+  if (!Blynk.connected()) return;
+  Blynk.virtualWrite(V0, distance);
+  Blynk.virtualWrite(V1, status);
+  prevStatus = status;
+  prevDistance = distance;
+  lastBlynkSend = millis();
+}
+
 void sendTelemetryToBlynk() {
   if (!Blynk.connected()) return;
 
@@ -241,6 +338,10 @@ void sendTelemetryToBlynk() {
   Blynk.virtualWrite(V3, gps.location.isValid() ? gps.location.lng() : 0.0);
   Blynk.virtualWrite(V4, (int)gps.satellites.value());
   Blynk.virtualWrite(V5, getGpsStateString());
+
+  prevStatus = status;
+  prevDistance = distance;
+  lastBlynkSend = millis();
 }
 
 BLYNK_CONNECTED() {
@@ -250,56 +351,69 @@ BLYNK_CONNECTED() {
 
 void setup() {
   Serial.begin(115200);
+  delay(300);
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(LED_RED, OUTPUT);
-  pinMode(LED_YELLOW, OUTPUT);
-  pinMode(LED_GREEN, OUTPUT);
+  pinMode(RGB_RED_PIN, OUTPUT);
+  pinMode(RGB_GREEN_PIN, OUTPUT);
+  pinMode(RGB_BLUE_PIN, OUTPUT);
+  setRgbColor(0, 0, 255); // BIRU saat sistem menyala / connecting
+
+  // Beep singkat saat boot sebagai konfirmasi hardware buzzer & board aktif
+  tone(BUZZER_PIN, 2000);
+  delay(100);
+  noTone(BUZZER_PIN);
 
   Wire.begin(OLED_SDA, OLED_SCL);
-  Wire.setClock(400000);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
-    Serial.println("OLED tidak ditemukan, cek kabel / alamat");
+  Wire.setTimeOut(30);
+  oledFound = display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS);
+  if (!oledFound) {
+    Serial.println("OLED tidak terdeteksi (atau pin berbeda). Sistem sensor & Blynk tetap berjalan.");
+  } else {
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.println("Sistem Banjir C3");
+    display.println("WiFi + Blynk Siap...");
+    display.display();
   }
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("Sistem Banjir");
-  display.println("WiFi + Blynk Siap...");
-  display.display();
 
-  Serial2.setRxBufferSize(1024);
-  Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
+  GPS_SERIAL.setRxBufferSize(1024);
+  GPS_SERIAL.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
 
   // Koneksi WiFi & Blynk non-blocking agar sensor tetap berjalan
+  Serial.print("Menghubungkan ke WiFi: ");
+  Serial.println(WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Blynk.config(BLYNK_AUTH_TOKEN, BLYNK_SERVER_HOST, 80);
 
-  // Kirim telemetry ke Blynk setiap 1 detik saat online
-  timer.setInterval(1000L, sendTelemetryToBlynk);
+  // Kirim telemetry cepat V0 & V1 tiap 350 ms saat online
+  timer.setInterval(350L, sendFastTelemetryToBlynk);
+  // Kirim telemetry lengkap termasuk GPS tiap 4 detik
+  timer.setInterval(4000L, sendTelemetryToBlynk);
 }
 
 void loop() {
-  while (Serial2.available()) {
-    gps.encode(Serial2.read());
+  while (GPS_SERIAL.available()) {
+    gps.encode(GPS_SERIAL.read());
   }
 
   if (WiFi.status() == WL_CONNECTED) {
     if (Blynk.connected()) {
       Blynk.run();
-    } else if (millis() - lastBlynkAttempt >= 10000) {
+    } else if (millis() - lastBlynkAttempt >= 8000) {
       lastBlynkAttempt = millis();
       Serial.println("Menghubungkan ke Blynk Cloud...");
-      Blynk.connect(1500);
+      Blynk.connect(4000);
     }
   }
   timer.run();
 
-  if (millis() - lastSensorTime >= 150) {
+  if (millis() - lastSensorTime >= 100) {
     lastSensorTime = millis();
     readUltrasonicAndEvaluate();
   }

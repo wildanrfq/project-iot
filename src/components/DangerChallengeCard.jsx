@@ -18,7 +18,7 @@ export function DangerChallengeCard({
   const [phase, setPhase] = useState('idle'); // idle | armed | holding | won | failed
   const [holdMs, setHoldMs] = useState(0);
   const [challengeNote, setChallengeNote] = useState(
-    'Isi nama & pilih angkatan, tekan Mulai Tantangan, lalu tahan air di zona BAHAYA (3.1 - 7.0 cm) selama 3.0 detik.'
+    'Isi nama & pilih angkatan, tekan Mulai Tantangan, lalu tahan air di zona BAHAYA (5.1 - 9.0 cm) selama 3.0 detik.'
   );
   const [score, setScore] = useState({ wins: 0, failures: 0, bestSec: 0 });
   const [lastResult, setLastResult] = useState(null);
@@ -180,7 +180,7 @@ export function DangerChallengeCard({
       setPhase('armed');
       setScore((prev) => ({ ...prev, bestSec: Math.max(prev.bestSec, elapsedSec) }));
       setChallengeNote(
-        `Air turun ke ${criterion.code} (${criterion.displayDistance}). Naikkan lagi ke zona BAHAYA (3.1 - 7.0 cm)!`
+        `Air turun ke ${criterion.code} (${criterion.displayDistance}). Naikkan lagi ke zona BAHAYA (5.1 - 9.0 cm)!`
       );
     }
   }, [criterion, submitResultToLeaderboard]);
@@ -245,7 +245,7 @@ export function DangerChallengeCard({
       setHoldMs(0);
       setPhase('armed');
       setChallengeNote(
-        'Status masih KRITIS! Turunkan air dulu ke atas 3.0 cm lalu bidik zona BAHAYA (3.1 - 7.0 cm).'
+        'Status masih KRITIS! Turunkan air dulu ke atas 5.0 cm lalu bidik zona BAHAYA (5.1 - 9.0 cm).'
       );
       return;
     }
@@ -264,7 +264,7 @@ export function DangerChallengeCard({
     setHoldMs(0);
     setPhase('armed');
     setChallengeNote(
-      `Tantangan aktif untuk ${cleanName} (Angk. ${angkatan})! Naikkan air ke 3.1 - 7.0 cm (BAHAYA).`
+      `Tantangan aktif untuk ${cleanName} (Angk. ${angkatan})! Naikkan air ke 5.1 - 9.0 cm (BAHAYA).`
     );
   }
 
@@ -319,9 +319,9 @@ export function DangerChallengeCard({
       </div>
 
       <p className="field-help">
-        Tantang pengunjung untuk menaikkan air tepat ke zona <strong>BAHAYA (3.1 - 7.0 cm)</strong>{' '}
+        Tantang pengunjung untuk menaikkan air tepat ke zona <strong>BAHAYA (5.1 - 9.0 cm)</strong>{' '}
         lalu menahannya stabil selama <strong>3.0 detik</strong> tanpa menyentuh{' '}
-        <strong>KRITIS (&lt;= 3.0 cm)</strong>!
+        <strong>KRITIS (&lt;= 5.0 cm)</strong>!
       </p>
 
       {!isSourcePlayable && (

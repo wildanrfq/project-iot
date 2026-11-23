@@ -10,7 +10,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "NODE_ENV=production node server/index.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "esp32:compile": "\"/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli\" compile --fqbn esp32:esp32:esp32c3 firmware/esp32_blynk/esp32_blynk.ino",
+    "esp32:upload": "\"/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli\" compile --upload -p /dev/cu.usbmodem1101 --fqbn esp32:esp32:esp32c3 firmware/esp32_blynk/esp32_blynk.ino",
+    "esp32:monitor": "\"/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli\" monitor -p /dev/cu.usbmodem1101 -c baudrate=115200",
+    "esp32:classic:compile": "\"/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli\" compile --fqbn esp32:esp32:esp32 firmware/esp32_blynk/esp32_blynk.ino",
+    "esp32:classic:upload": "\"/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/arduino-cli\" compile --upload -p /dev/cu.usbserial-0001 --fqbn esp32:esp32:esp32 firmware/esp32_blynk/esp32_blynk.ino"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.5",

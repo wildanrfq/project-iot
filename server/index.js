@@ -26,9 +26,48 @@ export function createApp(
     res.json(monitorService.getState());
   });
 
+  app.get('/api/live', (_req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
+
+    res.write(`data: ${JSON.stringify(monitorService.getState())}\n\n`);
+
+    const unsubscribe = typeof monitorService.subscribe === 'function'
+      ? monitorService.subscribe((state) => {
+          try {
+            res.write(`data: ${JSON.stringify(state)}\n\n`);
+          } catch {}
+        })
+      : () => {};
+
+    _req.on('close', () => {
+      unsubscribe();
+    });
+  });
+
   app.post('/api/refresh', async (_req, res) => {
     const state = await monitorService.refreshNow();
     res.json(state);
+  });
+
+  app.post('/api/telemetry/push', async (req, res) => {
+    try {
+      const { distanceCm, reportedStatus, gps, sourceLabel } = req.body || {};
+      if (distanceCm === undefined || distanceCm === null) {
+        return res.status(400).json({ error: 'Parameter distanceCm wajib diisi.' });
+      }
+      if (typeof monitorService.pushDirectReading === 'function') {
+        const state = await monitorService.pushDirectReading({ distanceCm, reportedStatus, gps, sourceLabel });
+        return res.json({ ok: true, state });
+      }
+      res.status(501).json({ error: 'Direct push tidak didukung service.' });
+    } catch (err) {
+      res.status(500).json({ error: err?.message || 'Gagal memproses telemetry langsung.' });
+    }
   });
 
   app.post('/api/config', async (req, res) => {
